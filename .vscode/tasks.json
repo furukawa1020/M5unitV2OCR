@@ -1,0 +1,81 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "PIO: Build",
+            "type": "shell",
+            "command": "pio",
+            "args": ["run"],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "PIO: Upload",
+            "type": "shell",
+            "command": "pio",
+            "args": ["run", "--target", "upload"],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "PIO: Build & Upload",
+            "type": "shell",
+            "command": "pio",
+            "args": ["run", "--target", "upload"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "PIO: Monitor",
+            "type": "shell",
+            "command": "pio",
+            "args": ["device", "monitor"],
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": [],
+            "isBackground": true
+        },
+        {
+            "label": "PIO: Clean",
+            "type": "shell",
+            "command": "pio",
+            "args": ["run", "--target", "clean"],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "PIO: Upload & Monitor",
+            "type": "shell",
+            "command": "pio",
+            "args": ["run", "--target", "upload"],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

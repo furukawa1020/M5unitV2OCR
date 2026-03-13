@@ -1,0 +1,68 @@
+# M5UnitV2 OCR プロジェクト
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 仮想環境
+venv/
+ENV/
+env/
+
+# IDEs
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+!.vscode/tasks.json
+.idea/
+*.swp
+*.swo
+*~
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+lib/
+libdeps/
+
+# M5Stack
+*.mpy
+
+# 設定ファイル（APIキーを含む）
+config_local.py
+secrets.py
+include/config_local.h
+src/config_local.h
+
+# ログファイル
+*.log
+
+# 一時ファイル
+*.tmp
+*.bak
+*.backup
+
+# OS
+.DS_Store
+Thumbs.db
+
+# テスト画像（大きいファイル）
+test_images/
+*.jpg
+*.png
+*.jpeg
+*.bmp
+!sample_small.png
+
+# ビルド成果物
+*.bin
+*.elf
+*.hex
+
+# その他
+*.zip
+*.tar.gz
