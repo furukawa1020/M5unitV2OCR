@@ -77,23 +77,35 @@ def stream_thread_func(session, stop_event):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 画像前処理
+# 画像前処理  ※二値化しない・拡大優先
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Tesseractは文字が小さいと認識率が極端に下がる。
+# 最低でも縦30px以上必要なので、まず拡大するのが最優先。
+# 二値化はかえって細い漢字ストロークを壊すので使わない。
+SCALE = 3.0   # 拡大率 (2.0〜4.0 で調整)
+
 def preprocess(image_bytes):
     try:
         import cv2, numpy as np
         arr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        h, w = img.shape[:2]
+        # --- 1. 拡大 (LANCZOS4 = 最高品質) ---
+        big = cv2.resize(img, (int(w * SCALE), int(h * SCALE)),
+                         interpolation=cv2.INTER_LANCZOS4)
+        # --- 2. グレースケール ---
+        gray = cv2.cvtColor(big, cv2.COLOR_BGR2GRAY)
+        # --- 3. コントラスト強調 (軽め) ---
+        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
         eq = clahe.apply(gray)
-        blur = cv2.GaussianBlur(eq, (3,3), 0)
-        binary = cv2.adaptiveThreshold(blur, 255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-        _, buf = cv2.imencode(".jpg", binary, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        return buf.tobytes()
+        # --- 4. 軽いシャープ ---
+        kernel = np.array([[0, -0.5, 0], [-0.5, 3, -0.5], [0, -0.5, 0]])
+        sharp = cv2.filter2D(eq, -1, kernel)
+        # --- 5. PNG (ロスレス) で返す ---
+        _, buf = cv2.imencode(".png", sharp)
+        return buf.tobytes(), ".png"
     except Exception:
-        return image_bytes
+        return image_bytes, ".jpg"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -102,12 +114,26 @@ def preprocess(image_bytes):
 def _ocr_worker(image_bytes, tess_path):
     global ocr_result, ocr_running
     import tempfile
-    tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-    base = tmp.name[:-4]
+    processed, ext = preprocess(image_bytes)
+    tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+    base = tmp.name[: -len(ext)]
     try:
-        tmp.write(preprocess(image_bytes)); tmp.close()
-        r = subprocess.run([tess_path, tmp.name, base, "-l", OCR_LANG, "--psm", "3"],
-                           capture_output=True, text=True, timeout=30)
+        tmp.write(processed); tmp.close()
+        # --oem 1  : LSTMエンジン (精度優先)
+        # --psm 6  : 均一テキストブロックとして認識
+        # --dpi 300: 解像度ヒント (拡大済みなので近似値)
+        # -c preserve_interword_spaces=1 : 単語間スペース保持
+        cmd = [
+            tess_path, tmp.name, base,
+            "-l", OCR_LANG,
+            "--oem", "1",
+            "--psm", "6",
+            "--dpi", "300",
+            "-c", "preserve_interword_spaces=1",
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if r.stderr.strip():
+            log(f"Tesseract stderr: {r.stderr.strip()[:120]}", "ERR")
         txt_path = base + ".txt"
         if os.path.exists(txt_path):
             with open(txt_path, encoding="utf-8", errors="replace") as f:
@@ -118,9 +144,10 @@ def _ocr_worker(image_bytes, tess_path):
             ocr_result = text if text else "（テキストなし）"
         log(f"OCR完了: {len(text)}文字", "OCR")
         if text:
-            log(text[:100].replace("\n","  "), "OCR")
+            log(text[:200].replace("\n", "  "), "OCR")
     except Exception as e:
         with ocr_lock: ocr_result = f"（エラー: {e}）"
+        log(f"OCR例外: {e}", "ERR")
     finally:
         ocr_running = False
         for p in [tmp.name, base + ".txt"]:
