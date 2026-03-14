@@ -29,20 +29,14 @@ OCR_LANG    = "jpn+eng"   # "eng" のみにすると日本語モデル不要で�
 INTERVAL    = 5            # 秒 (0=連続モード)
 TESSERACT   = r"C:\Program Files\Tesseract-OCR\tesseract.exe"  # Windows既定パス
 
-# UnitV2 のカメラエンドポイント候補 (順番に試す)
-STREAM_URLS = [
-    f"http://{UNITV2_IP}/stream",
-    f"http://{UNITV2_IP}/video",
-    f"http://{UNITV2_IP}:8080/stream",
-    f"http://{UNITV2_IP}:8080/?action=stream",
-]
+# UnitV2 Flask サーバーエンドポイント (確認済み)
+FUNC_URL    = f"http://{UNITV2_IP}/func"          # 機能切替 POST
+STREAM_URL  = f"http://{UNITV2_IP}/video_feed"    # MJPEGストリーム
+
+# フォールバック用スナップ候補 (video_feed が失敗した場合)
 SNAP_URLS = [
     f"http://{UNITV2_IP}/shot.jpg",
     f"http://{UNITV2_IP}/capture",
-    f"http://{UNITV2_IP}/img",
-    f"http://{UNITV2_IP}/snapshot",
-    f"http://{UNITV2_IP}:8080/?action=snapshot",
-    f"http://{UNITV2_IP}:8080/shot.jpg",
 ]
 
 def log(msg, level="INFO"):
@@ -128,51 +122,51 @@ def preprocess(image_bytes):
         return image_bytes
 
 
-def fetch_snapshot(session):
-    """HTTP スナップショットで1枚取得"""
-    for url in SNAP_URLS:
-        try:
-            r = session.get(url, timeout=5)
-            if r.status_code == 200 and len(r.content) > 500:
-                log(f"スナップショット取得: {url} ({len(r.content)} bytes)", "OK")
-                return r.content
-        except Exception:
-            pass
-    return None
+def activate_camera_stream(session):
+    """UnitV2 を camera_stream モードに切り替える"""
+    try:
+        r = session.post(FUNC_URL,
+                         json={"type_name": "camera_stream", "args": []},
+                         timeout=10)
+        if r.status_code == 200:
+            log("camera_stream モード起動", "OK")
+            time.sleep(3)  # 起動待ち
+            return True
+        else:
+            log(f"func POST 失敗: {r.status_code}", "ERR")
+    except Exception as e:
+        log(f"func POST エラー: {e}", "ERR")
+    return False
 
 
-def fetch_from_stream(session):
-    """MJPEG ストリームから1フレーム取得"""
-    for url in STREAM_URLS:
-        try:
-            r = session.get(url, stream=True, timeout=5)
-            if r.status_code != 200:
-                continue
-            buf = b""
-            for chunk in r.iter_content(chunk_size=1024):
-                buf += chunk
-                # JPEG の開始・終了マーカーを探す
-                start = buf.find(b"\xff\xd8")
-                end   = buf.rfind(b"\xff\xd9")
-                if start != -1 and end != -1 and end > start:
-                    frame = buf[start:end + 2]
-                    log(f"フレーム取得: {url} ({len(frame)} bytes)", "OK")
-                    r.close()
-                    return frame
-                if len(buf) > 200_000:  # 200KB 以上たまったら打ち切り
-                    break
-            r.close()
-        except Exception:
-            pass
+def fetch_from_mjpeg(session):
+    """MJPEG ストリーム (multipart/x-mixed-replace) から1フレーム取得"""
+    try:
+        r = session.get(STREAM_URL, stream=True, timeout=8)
+        if r.status_code != 200:
+            log(f"video_feed HTTP {r.status_code}", "ERR")
+            return None
+        buf = b""
+        for chunk in r.iter_content(chunk_size=4096):
+            buf += chunk
+            start = buf.find(b"\xff\xd8")
+            end   = buf.rfind(b"\xff\xd9")
+            if start != -1 and end != -1 and end > start:
+                frame = buf[start:end + 2]
+                r.close()
+                log(f"フレーム取得: {len(frame)} bytes", "OK")
+                return frame
+            if len(buf) > 500_000:
+                break
+        r.close()
+    except Exception as e:
+        log(f"ストリーム取得エラー: {e}", "ERR")
     return None
 
 
 def get_frame(session):
-    """スナップショット優先、失敗したらストリームから取得"""
-    frame = fetch_snapshot(session)
-    if frame:
-        return frame
-    return fetch_from_stream(session)
+    """MJPEG ストリームからフレーム取得 (camera_streamが必要)"""
+    return fetch_from_mjpeg(session)
 
 
 def print_result(text, elapsed, count):
@@ -261,6 +255,12 @@ def main():
     import requests
     session = requests.Session()
     session.timeout = 8
+
+    # camera_stream モードを起動
+    log("UnitV2 を camera_stream モードに切り替え中...")
+    if not activate_camera_stream(session):
+        log("自動切替失敗 - 手動で http://10.254.239.1 を開いて camera_stream を選択するか続行します", "WAIT")
+        time.sleep(2)
 
     count = 0
     error_count = 0
