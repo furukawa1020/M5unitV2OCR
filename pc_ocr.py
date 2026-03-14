@@ -9,7 +9,8 @@ OCRエンジン: EasyOCR (深層学習・日本語対応)
   Space … 自動OCR オン/オフ切替
 """
 
-import sys, os, time, subprocess, threading
+import sys, os, time, subprocess, threading, warnings
+warnings.filterwarnings("ignore")   # PyTorch pin_memory 警告などを抑制
 
 # ─── 設定 ────────────────────────────────────────
 UNITV2_IP    = "10.254.239.1"
@@ -160,7 +161,7 @@ def draw_results(img, results, auto_on, is_running, scale):
     # ─ バウンディングボックス ─
     for bbox, txt, conf in results:
         pts = [(int(x / scale), int(y / scale)) for x, y in bbox]
-        pts_arr = np.array(pts, dtype=np.int32)
+        pts_arr = np.array(pts, dtype=np.int32).reshape((-1, 1, 2))  # cv2.polylines は (N,1,2) 必須
         cv2.polylines(img, [pts_arr], True, (0, 255, 80), 2)
         # 左上にconfidence
         cv2.putText(img, f"{conf:.0%}", pts[0],
