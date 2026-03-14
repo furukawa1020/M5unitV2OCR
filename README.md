@@ -1,184 +1,160 @@
-# M5UnitV2 OCR文字認識
+﻿# M5Stack UnitV2 OCR — PC リアルタイムプレビュー版
 
-M5Stack UnitV2を使用して、OCR（光学文字認識）を実行するプロジェクトです。
+UnitV2 のカメラ映像を PC で受信し、**EasyOCR**（深層学習）でリアルタイム文字認識するプロジェクトです。  
+WiFi **不要**。USB ケーブル 1 本で接続します。
 
-## 概要
+---
 
-このプロジェクトは、M5Stack UnitV2カメラモジュールで画像をキャプチャし、Google Cloud Vision APIを使用して文字認識を行います。
+## 動作イメージ
 
-## 3つの実装方法
+```
+UnitV2 (カメラ) ─── USB-C ─── SR9900 USB-LAN ─── PC
+                                                   │
+                                            pc_ocr.py
+                                         EasyOCR リアルタイム表示
+```
 
-### 🎯 UnitV2直接実行版（最新・推奨！）
-- **特徴**: UnitV2本体で直接OCR実行、M5Stack不要、スタンドアローン動作
-- **開発環境**: MaixPy3 (Python)、adb経由でアップロード
-- **クイックスタート**: [README_UNITV2_QUICK.md](README_UNITV2_QUICK.md)
-- **詳細ガイド**: [README_UNITV2.md](README_UNITV2.md)
+- UnitV2 の映像がリアルタイムでウィンドウに表示される
+- 文字が検出されると **緑の枠** でハイライト
+- 画面下部に認識テキスト・信頼度一覧を表示
 
-### 🔧 PlatformIO版 - M5Stack + UnitV2
-- **特徴**: M5StackにUSB経由でビルド・アップロード、C++で高速実行
-- **開発環境**: PlatformIO + Arduino
-- **クイックスタート**: [QUICKSTART_PLATFORMIO.md](QUICKSTART_PLATFORMIO.md)
-- **詳細ガイド**: [PLATFORMIO_GUIDE.md](PLATFORMIO_GUIDE.md)
+---
 
-### 🐍 MicroPython版 - M5Stack + UnitV2
-- **特徴**: M5StackにPythonスクリプト実行、簡単プロトタイピング
-- **開発環境**: UIFlow2.0
-- **クイックスタート**: [QUICKSTART.md](QUICKSTART.md)
+## 必要なもの
 
-## 必要なハードウェア
+### ハードウェア
+| 品名 | 備考 |
+|---|---|
+| M5Stack UnitV2 | カメラモジュール |
+| USB-C ケーブル | データ転送対応のもの |
 
-### UnitV2直接実行版
-- **M5Stack UnitV2カメラモジュール**（単体で動作）
-- USB Type-Cケーブル（データ転送対応）
-- WiFiルーター
+> UnitV2 は SR9900 チップの USB-LAN として認識されます。M5Stack 本体は不要です。
 
-### M5Stack連携版
-- M5Stack（Core2、Basic、Grayなど）
-- M5Stack UnitV2カメラモジュール
-- Grove接続ケーブル
-- USB Type-Cケーブル（データ転送対応）
+### ソフトウェア
+| ソフト | バージョン |
+|---|---|
+| Python | 3.14 (動作確認済) |
+| EasyOCR | 1.7.2 |
+| OpenCV (`opencv-python`) | 4.13 |
+| Pillow | 12.x |
+| requests | 最新 |
 
-## 必要なソフトウェア
-
-### UnitV2直接実行版
-- Android Platform Tools (adb)
-- Google Cloud アカウント（Vision API用）
-- WiFi接続環境
-
-### PlatformIO版（M5Stack）
-- Visual Studio Code
-- PlatformIO IDE拡張機能
-- Google Cloud アカウント（Vision API用）
-
-### MicroPython版（M5Stack）
-- UIFlow2.0 または MicroPython環境
-- Google Cloud アカウント（Vision API用）
+---
 
 ## セットアップ
 
-### 1. ハードウェアの接続
+### 1. SR9900 USB-LAN ドライバのインストール
 
-1. M5Stack UnitV2をM5StackのGroveポートに接続します
-2. デフォルトではPortA（GPIO 16/17）を使用します
+UnitV2 を PC に USB 接続する前に、ドライバをインストールします。
 
-### 2. Google Cloud Vision API の設定
+**PowerShell（管理者）で実行：**
+```powershell
+.\tools\install_sr9900_driver.ps1
+```
 
-1. [Google Cloud Console](https://console.cloud.google.com/)にアクセス
-2. 新しいプロジェクトを作成
-3. Cloud Vision APIを有効化
-4. 認証情報でAPIキーを作成
-5. `config.py`ファイルの`GOOGLE_API_KEY`に取得したAPIキーを設定
+インストール後にケーブルを接続し直すと、PC に IP `10.254.239.124`、UnitV2 に `10.254.239.1` が割り当てられます。  
+接続確認：
+```powershell
+ping 10.254.239.1
+```
+
+詳細手順 → [USB_DRIVER_INSTALL.md](USB_DRIVER_INSTALL.md)
+
+### 2. Python パッケージのインストール
+
+```powershell
+python -m pip install easyocr opencv-python pillow requests
+```
+
+> ⚠️ `opencv-python-headless` は GUI が使えないため **インストール禁止**。  
+> EasyOCR が自動でインストールしようとしたら手動で削除してください：
+> ```powershell
+> pip uninstall opencv-python-headless -y
+> pip install opencv-python --force-reinstall
+> ```
+
+### 3. SSH 鍵の登録（初回のみ）
+
+UnitV2 に公開鍵を登録するとパスワード不要になります：
+
+```powershell
+python tools\probe_unitv2.py
+```
+
+---
+
+## 使い方
+
+```powershell
+python pc_ocr.py
+```
+
+| キー | 動作 |
+|---|---|
+| `s` | 今すぐ OCR 実行 |
+| `Space` | 自動 OCR オン / オフ |
+| `q` | 終了 |
+
+### 設定のカスタマイズ
+
+`pc_ocr.py` の冒頭部分で調整できます：
 
 ```python
-GOOGLE_API_KEY = "your_api_key_here"
+OCR_LANGS    = ["ja", "en"]  # 認識言語
+OCR_INTERVAL = 5.0           # 自動 OCR 間隔（秒）
+CONF_MIN     = 0.1           # 信頼度の下限（0.0〜1.0）
+SCALE        = 2.0           # 前処理拡大率（大きいほど精度↑・速度↓）
 ```
 
-### 3. ファイルのアップロード
+---
 
-1. `main.py`と`config.py`をM5Stackにアップロード
-2. M5Stackを再起動
+## ファイル構成
 
-## 使unitv2/                         # UnitV2直接実行版 ⭐NEW
-│   ├── main.py                     # UnitV2メインプログラム
-│   └── config_unitv2.py            # UnitV2設定ファイル
-├── tools/                          # アップロードツール ⭐NEW
-│   ├── upload_to_unitv2.ps1        # UnitV2アップロードスクリプト
-│   └── connect_unitv2.ps1          # UnitV2接続ツール
-├── platformio.ini                  # PlatformIO設定
-├── src/
-│   └── main.cpp                    # C++メインプログラム（M5Stack版）
-├── include/
-│   └── config.h                    # C++設定ファイル
-├── main.py                         # Pythonメインプログラム（M5Stack版）
-├── simple_ocr.py                   # シンプル版OCR（Python）
-├── utils.py                        # ユーティリティ（Python）
-├── config.py                       # Python設定ファイル
-├── README.md                       # このファイル
-├── README_UNITV2.md                # UnitV2詳細ガイド ⭐NEW
-├── README_UNITV2_QUICK.md          # UnitV2クイックスタート ⭐NEW
-├── QUICKSTART_PLATFORMIO.md        # PlatformIO クイックスタート
-├── PLATFORMIO_GUIDE.md             # PlatformIO 詳細ガイド
-└── QUICKSTART.md    
-│   └── main.cpp                # C++メインプログラム（PlatformIO版）
-├── include/
-│   └── config.h                # C++設定ファイル
-├── main.py                     # Pythonメインプログラム（MicroPython版）
-├── simple_ocr.py               # シンプル版OCR（Python）
-├── utils.py                    # ユーティリティ（Python）
-├── config.py                   # Python設定ファイル
-├── README.md                   # このファイル
-├── QUICKSTART_PLATFORMIO.md    # PlatformIO クイックスタート
-├── PLATFORMIO_GUIDE.md         # PlatformIO 詳細ガイド
-└── QUICKSTART.md               # MicroPython クイックスタート
+```
+M5unitV2OCR/
+├── pc_ocr.py                  ★ メインスクリプト（EasyOCR版）
+├── tools/
+│   ├── install_sr9900_driver.ps1  SR9900 ドライバインストーラー
+│   ├── connect_usb.ps1            USB 接続確認
+│   └── probe_unitv2.py            UnitV2 接続テスト・SSH 鍵登録
+├── USB_DRIVER_INSTALL.md      ドライバインストール詳細手順
+└── README.md                  このファイル
 ```
 
-## 主な機能
-
-### UnitV2OCRクラス
-
-- `__init__()`: UART通信の初期化
-- `capture_image()`: UnitV2で画像をキャプチャ
-- `ocr_with_google_vision()`: Google Cloud Vision APIでOCR実行
-- `display_result()`: 認識結果を表示
-
-## カスタマイズ
-
-### ピン設定の変更
-
-`config.py`または`main.py`の以下の部分を編集：
-
-```python
-UART_TX = 17  # 接続に応じて変更
-UART_RX = 16  # 接続に応じて変更
-```
-
-### 代替OCRソリューション
-
-Google Cloud Vision APIの代わりに、以下のサービスも使用できます：
-
-1. **Azure Computer Vision API**
-2. **AWS Rekognition**
-3. **Tesseract OCR（ローカルサーバー経由）**
+---
 
 ## トラブルシューティング
 
-### UnitV2が応答しない
+### ウィンドウが開かない / `cv2.namedWindow` エラー
+`opencv-python-headless` が入っていないか確認：
+```powershell
+python -m pip list | Select-String opencv
+```
+`opencv-python-headless` が表示されたら削除して `opencv-python` を再インストールしてください。
 
-- 配線を確認してください
-- ボーレートが正しいか確認（デフォルト: 115200）
-- UnitV2のファームウェアが最新か確認
+### `10.254.239.1` に ping が届かない
+- SR9900 ドライバが正しくインストールされているか確認
+- デバイスマネージャーで `Corechip SR9900` が「正常」になっているか確認
+- USB ケーブルを抜き差し
+- `.\tools\connect_usb.ps1` で診断
 
-### API エラー
+### OCR が「テキストなし」になる
+- ターミナルの `RAW検出: N件` を確認
+  - `0件` → カメラが近すぎる / ピンぼけ / 照明不足
+  - `N件 (conf < 0.1)` → `CONF_MIN` をさらに下げる（例：`0.05`）
+- `SCALE = 3.0` に上げると小さい文字への精度が向上
 
-- APIキーが正しく設定されているか確認
-- Google Cloud ConsoleでVision APIが有効になっているか確認
-- APIの使用制限を確認
+### 初回起動が遅い
+EasyOCR は初回起動時に日英モデル（約 200 MB）をダウンロードします。  
+2 回目以降はキャッシュが使われます。
 
-### Wi-Fi接続エラー
+---
 
-- M5StackがWi-Fiに接続されているか確認
-- インターネット接続を確認
+## 接続情報
 
-## 参考リンク
-
-- [M5Stack UnitV2 製品ページ](https://docs.m5stack.com/en/unit/unitv2)
-- [Google Cloud Vision API ドキュメント](https://cloud.google.com/vision/docs)
-- [M5Stack UIFlow2.0](https://flow.m5stack.com/)
-
-## ライセンス
-
-MIT License
-
-## 注意事項
-
-- Google Cloud Vision APIは有料サービスです（無料枠あり）
-- APIキーは公開しないでください
-- 個人情報を含む文書の認識には注意してください
-
-## 今後の改善案
-
-- [ ] オフラインOCR対応（UnitV2のAI機能を活用）
-- [ ] 複数言語対応
-- [ ] テキストの保存機能
-- [ ] リアルタイムOCR
-- [ ] カメラ設定の調整機能
+| 項目 | 値 |
+|---|---|
+| UnitV2 IP | `10.254.239.1` |
+| PC IP | `10.254.239.124` |
+| 映像 URL | `http://10.254.239.1/video_feed` |
+| SSH | `m5stack@10.254.239.1` (鍵認証) |
