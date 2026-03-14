@@ -125,12 +125,15 @@ def preprocess(image_bytes):
 def activate_camera_stream(session):
     """UnitV2 を camera_stream モードに切り替える"""
     try:
+        # まず / にアクセスして client_is_connected = True にする (必須)
+        session.get(f"http://{UNITV2_IP}/", timeout=8)
+        # camera_stream モードに切替
         r = session.post(FUNC_URL,
                          json={"type_name": "camera_stream", "args": []},
                          timeout=10)
         if r.status_code == 200:
             log("camera_stream モード起動", "OK")
-            time.sleep(3)  # 起動待ち
+            time.sleep(4)  # 起動待ち
             return True
         else:
             log(f"func POST 失敗: {r.status_code}", "ERR")
