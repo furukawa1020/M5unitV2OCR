@@ -29,6 +29,10 @@ FUNC_URL    = f"http://{UNITV2_IP}/func"
 STREAM_URL  = f"http://{UNITV2_IP}/video_feed"
 WINDOW_NAME = "UnitV2 OCR  [q:終了  s:OCR  Space:自動ON/OFF]"
 
+# 信頼度フィルタ: 0〜100。低いほど拾う範囲が広がる。
+# 55 あたりが「ノイズ無視・実テキスト検出」のバランス点。
+CONF_THRESHOLD = 55
+
 # ---- グローバル状態 ----
 latest_frame  = None
 frame_lock    = threading.Lock()
@@ -110,49 +114,55 @@ def preprocess(image_bytes):
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # OCR (バックグラウンドスレッド)
+# pytesseract image_to_data() で信頼度フィルタをかける
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def _ocr_worker(image_bytes, tess_path):
     global ocr_result, ocr_running
-    import tempfile
-    processed, ext = preprocess(image_bytes)
-    tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
-    base = tmp.name[: -len(ext)]
     try:
-        tmp.write(processed); tmp.close()
-        # --oem 1  : LSTMエンジン (精度優先)
-        # --psm 6  : 均一テキストブロックとして認識
-        # --dpi 300: 解像度ヒント (拡大済みなので近似値)
-        # -c preserve_interword_spaces=1 : 単語間スペース保持
-        cmd = [
-            tess_path, tmp.name, base,
-            "-l", OCR_LANG,
-            "--oem", "1",
-            "--psm", "6",
-            "--dpi", "300",
-            "-c", "preserve_interword_spaces=1",
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if r.stderr.strip():
-            log(f"Tesseract stderr: {r.stderr.strip()[:120]}", "ERR")
-        txt_path = base + ".txt"
-        if os.path.exists(txt_path):
-            with open(txt_path, encoding="utf-8", errors="replace") as f:
-                text = "\n".join(ln for ln in f.read().splitlines() if ln.strip())
-        else:
-            text = ""
+        import pytesseract
+        from pytesseract import Output
+        from PIL import Image as PILImage
+        import io
+
+        pytesseract.pytesseract.tesseract_cmd = tess_path
+
+        processed, _ = preprocess(image_bytes)
+        pil_img = PILImage.open(io.BytesIO(processed))
+
+        # LSTMエンジン / 均一テキストブロック / 300dpi想定
+        cfg = "--oem 1 --psm 6 --dpi 300"
+        data = pytesseract.image_to_data(
+            pil_img, lang=OCR_LANG, config=cfg, output_type=Output.DICT
+        )
+
+        # 信頼度 CONF_THRESHOLD 以上の単語だけ残す
+        line_words: dict = {}
+        for i, word in enumerate(data["text"]):
+            if not word.strip():
+                continue
+            conf = int(data["conf"][i])   # -1 = 行区切りなど
+            if conf < CONF_THRESHOLD:
+                continue
+            key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+            line_words.setdefault(key, []).append(word)
+
+        text = "\n".join(
+            " ".join(words) for words in line_words.values() if words
+        )
+
         with ocr_lock:
-            ocr_result = text if text else "（テキストなし）"
-        log(f"OCR完了: {len(text)}文字", "OCR")
+            ocr_result = text if text else ""
         if text:
+            log(f"OCR完了: {len(text)}文字  (閾値={CONF_THRESHOLD})", "OCR")
             log(text[:200].replace("\n", "  "), "OCR")
+        else:
+            log(f"テキストなし (信頼度<{CONF_THRESHOLD}の文字は除外済み)", "OCR")
+
     except Exception as e:
         with ocr_lock: ocr_result = f"（エラー: {e}）"
         log(f"OCR例外: {e}", "ERR")
     finally:
         ocr_running = False
-        for p in [tmp.name, base + ".txt"]:
-            try: os.unlink(p)
-            except: pass
 
 
 def trigger_ocr(tess_path):
