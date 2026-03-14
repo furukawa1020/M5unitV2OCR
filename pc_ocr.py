@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore")   # PyTorch pin_memory 警告などを抑制
 UNITV2_IP    = "10.254.239.1"
 OCR_LANGS    = ["ja", "en"]   # EasyOCR言語コード
 OCR_INTERVAL = 5.0             # 自動OCR間隔(秒)  0=手動のみ
-CONF_MIN     = 0.3             # 信頼度下限 (0.0〜1.0)  低い単語は無視
+CONF_MIN     = 0.1             # 信頼度下限 (0.0〜1.0)  低い単語は無視
 SCALE        = 2.0             # 前処理拡大率 (大きいほど精度↑・速度↓)
 
 FUNC_URL    = f"http://{UNITV2_IP}/func"
@@ -101,6 +101,7 @@ def _ocr_worker(image_bytes):
         rgb = preprocess_for_easyocr(image_bytes)
         if rgb is None:
             return
+        log(f"処理画像サイズ: {rgb.shape[1]}x{rgb.shape[0]} (SCALE={SCALE})", "OCR")
 
         # readtext: detail=1 でバウンディングボックスつき
         raw = easyocr_reader.readtext(
@@ -108,7 +109,15 @@ def _ocr_worker(image_bytes):
             detail=1,
             paragraph=False,
             batch_size=4,
+            width_ths=0.7,
+            contrast_ths=0.1,
+            text_threshold=0.5,
+            low_text=0.3,
         )
+
+        log(f"RAW検出: {len(raw)}件 (フィルタ前)", "OCR")
+        for bbox, txt, conf in raw:
+            log(f"  RAW [{conf:.2f}] '{txt}'", "OCR")
 
         # 信頼度フィルタ
         results = [(bbox, txt, conf)
@@ -120,10 +129,8 @@ def _ocr_worker(image_bytes):
 
         if results:
             log(f"OCR完了: {len(results)}件  (conf>={CONF_MIN})", "OCR")
-            for _, txt, conf in results:
-                log(f"  [{conf:.0%}] {txt}", "OCR")
         else:
-            log("テキストなし", "OCR")
+            log(f"テキストなし (RAW {len(raw)}件全て conf<{CONF_MIN} または空)", "OCR")
 
     except Exception as e:
         log(f"OCR例外: {e}", "ERR")
