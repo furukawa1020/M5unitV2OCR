@@ -15,9 +15,10 @@ warnings.filterwarnings("ignore")   # PyTorch pin_memory 警告などを抑制
 # ─── 設定 ────────────────────────────────────────
 UNITV2_IP    = "10.254.239.1"
 OCR_LANGS    = ["ja", "en"]   # EasyOCR言語コード
-OCR_INTERVAL = 5.0             # 自動OCR間隔(秒)  0=手動のみ
+OCR_INTERVAL = 2.0             # 自動OCR間隔(秒)  0=手動のみ (Web連携用に短く)
 CONF_MIN     = 0.1             # 信頼度下限 (0.0〜1.0)  低い単語は無視
-SCALE        = 2.0             # 前処理拡大率 (大きいほど精度↑・速度↓)
+SCALE        = 3.0             # 前処理拡大率 (大きいほど精度↑・速度↓)
+WEB_PORT     = 8080            # Webサーバーポート
 
 FUNC_URL    = f"http://{UNITV2_IP}/func"
 STREAM_URL  = f"http://{UNITV2_IP}/video_feed"
@@ -32,6 +33,42 @@ ocr_running   = False
 auto_ocr      = True
 last_ocr_time = 0.0
 easyocr_reader = None   # 起動時に初期化
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Web Server (Flask)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def run_web_server():
+    from flask import Flask, send_from_directory, jsonify
+    app = Flask(__name__, static_folder='-/')
+
+    @app.route('/')
+    def index():
+        return send_from_directory('-/', 'index.html')
+
+    @app.route('/<path:path>')
+    def static_files(path):
+        return send_from_directory('-/', path)
+
+    @app.route('/api/ocr_result')
+    def get_ocr_result():
+        with ocr_lock:
+            # テキストを結合して返す
+            full_text = "".join([t for _, t, _ in ocr_result]) if ocr_result else ""
+            # 最も信頼度の高い1文字を取得（文字認識モード用）
+            top_char = ""
+            if ocr_result:
+                # 信頼度順にソートしたり、単純に最初の文字を使ったり
+                top_char = ocr_result[0][1][0] if ocr_result[0][1] else ""
+            
+            return jsonify({
+                "text": full_text,
+                "top_char": top_char,
+                "raw": [{"text": t, "conf": float(c), "bbox": [[int(x), int(y)] for x, y in b]} for b, t, c in ocr_result]
+            })
+
+    log(f"Webサーバー起動中: http://localhost:{WEB_PORT}", "INFO")
+    app.run(host='0.0.0.0', port=WEB_PORT, debug=False, use_reloader=False)
 
 
 def log(msg, level="INFO"):
@@ -84,21 +121,38 @@ def preprocess_for_easyocr(image_bytes):
     if SCALE != 1.0:
         img = cv2.resize(img, (int(w * SCALE), int(h * SCALE)),
                          interpolation=cv2.INTER_LANCZOS4)
-    # 軽いシャープ強調
-    import numpy as np
-    kernel = np.array([[0, -0.5, 0], [-0.5, 3, -0.5], [0, -0.5, 0]])
-    img = cv2.filter2D(img, -1, kernel)
-    # EasyOCR は RGB を期待する
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    
+    # 手書き向け前処理パイプライン
+    # 1. グレースケール化
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # 2. ノイズ除去 (fastNlMeansDenoising)
+    # h: フィルタの強さ (大きいほどノイズ消えるがディテールも消える)
+    denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
+
+    # 3. Adaptive Threshold (二値化) - 照明ムラ・影に対応
+    # blockSize=11, C=2 は一般的な設定
+    binary = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                   cv2.THRESH_BINARY, 11, 2)
+    
+    # 4. 膨張 (dilate) - 手書きの細い線やかすれをつなげる
+    kernel = np.ones((2, 2), np.uint8)
+    dilated = cv2.dilate(binary, kernel, iterations=1)
+
+    # 5. EasyOCR用にRGBに戻す (Gray -> RGB)
+    return cv2.cvtColor(dilated, cv2.COLOR_GRAY2RGB)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # OCR ワーカー (バックグラウンド)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-def _ocr_worker(image_bytes):
-    global ocr_result, ocr_running
-    try:
-        rgb = preprocess_for_easyocr(image_bytes)
+# ━━━━━━━━━━# 手書き最適化パラメータ
+            batch_size=4,
+            width_ths=1.0,         # 字間が広くてもつなげる (デフォルト0.7)
+            contrast_ths=0.05,     # 低コントラスト(薄い字)も拾う (デフォルト0.1)
+            text_threshold=0.3,    # 確信度が低くても文字候補とする (デフォルト0.5)
+            low_text=0.2,          # 文字領域の検出閾値を下げる (デフォルト0.4)
+            slope_ths=0.3,         # 斜め書き許容 (デフォルト0.1)
+            ycenter_ths=0.7,       # 行の縦ズレ許容 (デフォルト0.5)for_easyocr(image_bytes)
         if rgb is None:
             return
         log(f"処理画像サイズ: {rgb.shape[1]}x{rgb.shape[0]} (SCALE={SCALE})", "OCR")
@@ -272,6 +326,9 @@ def main():
     threading.Thread(target=stream_thread_func, args=(session, stop_event),
                      daemon=True).start()
     log("ストリーム受信開始", "OK")
+
+    # Start Web Server
+    threading.Thread(target=run_web_server, daemon=True).start()
 
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW_NAME, 640, 560)
