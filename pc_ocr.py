@@ -17,7 +17,7 @@ UNITV2_IP    = "10.254.239.1"
 OCR_LANGS    = ["ja", "en"]   # EasyOCR言語コード
 OCR_INTERVAL = 0               # 自動OCR間隔(秒)  0=待機なし（全力回転）
 CONF_MIN     = 0.1             # 信頼度下限 (0.0〜1.0)  低い単語は無視
-SCALE        = 2.0             # 前処理拡大率 (3.0は重いので2.0へ戻し、フィルタでカバー)
+SCALE        = 1.0             # 前処理拡大率 (CPU高速化のため1.0に設定)
 WEB_PORT     = 8080            # Webサーバーポート
 
 FUNC_URL    = f"http://{UNITV2_IP}/func"
@@ -122,24 +122,8 @@ def preprocess_for_easyocr(image_bytes):
         img = cv2.resize(img, (int(w * SCALE), int(h * SCALE)),
                          interpolation=cv2.INTER_LANCZOS4)
     
-    # 手書き向け前処理パイプライン (高速化版)
-    # 1. グレースケール化
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # 2. ノイズ除去 (高速化のため GaussianBlur に変更)
-    # fastNlMeansDenoising はリアルタイムには重すぎるため
-    gray = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    # 3. Adaptive Threshold (二値化) - 照明ムラ・影に対応
-    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                   cv2.THRESH_BINARY, 11, 2)
-    
-    # 4. 膨張 (dilate) - 手書きの細い線やかすれをつなげる
-    kernel = np.ones((2, 2), np.uint8)
-    dilated = cv2.dilate(binary, kernel, iterations=1)
-
-    # 5. EasyOCR用にRGBに戻す (Gray -> RGB)
-    return cv2.cvtColor(dilated, cv2.COLOR_GRAY2RGB)
+    # 軽量前処理 (CPU高速化版): カラーのままRGBに変換して返すだけ
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -158,14 +142,7 @@ def _ocr_worker(image_bytes):
             rgb,
             detail=1,
             paragraph=False,
-            # 手書き最適化パラメータ
-            batch_size=4,
-            width_ths=1.0,         # 字間が広くてもつなげる (デフォルト0.7)
-            contrast_ths=0.05,     # 低コントラスト(薄い字)も拾う (デフォルト0.1)
-            text_threshold=0.3,    # 確信度が低くても文字候補とする (デフォルト0.5)
-            low_text=0.2,          # 文字領域の検出閾値を下げる (デフォルト0.4)
-            slope_ths=0.3,         # 斜め書き許容 (デフォルト0.1)
-            ycenter_ths=0.7,       # 行の縦ズレ許容 (デフォルト0.5)
+            batch_size=1,
         )
 
         # 信頼度フィルタ
@@ -307,7 +284,7 @@ def main():
     log(f"EasyOCR 初期化中... (GPU: {torch.cuda.is_available()})")
     try:
         import easyocr
-        easyocr_reader = easyocr.Reader(OCR_LANGS, gpu=True, verbose=False)
+        easyocr_reader = easyocr.Reader(OCR_LANGS, gpu=False, verbose=False)
         log("EasyOCR 初期化完了", "OK")
     except ImportError:
         log("easyocr 未インストール: pip install easyocr", "ERR"); sys.exit(1)
