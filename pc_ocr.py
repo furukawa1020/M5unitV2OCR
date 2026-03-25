@@ -144,33 +144,29 @@ def preprocess_for_easyocr(image_bytes):
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # OCR ワーカー (バックグラウンド)
-# ━━━━━━━━━━# 手書き最適化パラメータ
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def _ocr_worker(image_bytes):
+    global ocr_result, ocr_running
+    start_time = time.time()
+    try:
+        rgb = preprocess_for_easyocr(image_bytes)
+        if rgb is None:
+            return
+        
+        # readtext: detail=1 でバウンディングボックスつき
+        raw = easyocr_reader.readtext(
+            rgb,
+            detail=1,
+            paragraph=False,
+            # 手書き最適化パラメータ
             batch_size=4,
             width_ths=1.0,         # 字間が広くてもつなげる (デフォルト0.7)
             contrast_ths=0.05,     # 低コントラスト(薄い字)も拾う (デフォルト0.1)
             text_threshold=0.3,    # 確信度が低くても文字候補とする (デフォルト0.5)
             low_text=0.2,          # 文字領域の検出閾値を下げる (デフォルト0.4)
             slope_ths=0.3,         # 斜め書き許容 (デフォルト0.1)
-            ycenter_ths=0.7,       # 行の縦ズレ許容 (デフォルト0.5)for_easyocr(image_bytes)
-        if rgb is None:
-            return
-        log(f"処理画像サイズ: {rgb.shape[1]}x{rgb.shape[0]} (SCALE={SCALE})", "OCR")
-
-        # readtext: detail=1 でバウンディングボックスつき
-        raw = easyocr_reader.readtext(
-            rgb,
-            detail=1,
-            paragraph=False,
-            batch_size=4,
-            width_ths=0.7,
-            contrast_ths=0.1,
-            text_threshold=0.5,
-            low_text=0.3,
+            ycenter_ths=0.7,       # 行の縦ズレ許容 (デフォルト0.5)
         )
-
-        log(f"RAW検出: {len(raw)}件 (フィルタ前)", "OCR")
-        for bbox, txt, conf in raw:
-            log(f"  RAW [{conf:.2f}] '{txt}'", "OCR")
 
         # 信頼度フィルタ
         results = [(bbox, txt, conf)
@@ -180,10 +176,11 @@ def preprocess_for_easyocr(image_bytes):
         with ocr_lock:
             ocr_result = results
 
+        elapsed = time.time() - start_time
         if results:
-            log(f"OCR完了: {len(results)}件  (conf>={CONF_MIN})", "OCR")
+            log(f"OCR完了: {len(results)}件 ({elapsed:.2f}秒) - {results[0][1]}", "OCR")
         else:
-            log(f"テキストなし (RAW {len(raw)}件全て conf<{CONF_MIN} または空)", "OCR")
+            log(f"OCR完了: 0件 ({elapsed:.2f}秒)", "OCR")
 
     except Exception as e:
         log(f"OCR例外: {e}", "ERR")
@@ -300,6 +297,10 @@ def main():
 
     import cv2, numpy as np, requests
 
+    # ── Webサーバー起動 (最優先) ──
+    threading.Thread(target=run_web_server, daemon=True).start()
+    log("Webサーバー起動試行中...", "INFO")
+
     # ── EasyOCR 初期化 ──
     log("EasyOCR 初期化中... (初回はモデルDL ~200MB, 数分かかります)")
     try:
@@ -311,23 +312,36 @@ def main():
     except Exception as e:
         log(f"EasyOCR 初期化失敗: {e}", "ERR"); sys.exit(1)
 
-    # ── UnitV2 接続 ──
+    # ── UnitV2 接続 (リトライループ) ──
     log("UnitV2 接続確認中...")
-    if not check_connection():
-        log("接続失敗。USB/WiFi接続を確認してください。", "ERR"); sys.exit(1)
-    log("接続OK", "OK")
-
     session = requests.Session()
+    stop_event = threading.Event()
+
+    # 接続待機ループ
+    connected_once = False
+    while not connected_once:
+        if check_connection():
+            log("接続OK", "OK")
+            connected_once = True
+        else:
+            log(f"接続失敗: {UNITV2_IP} に繋がりません。再試行中... (3秒後)", "ERR")
+            # プレビューウィンドウを一応出しておく（ユーザーが状況わかるように）
+            blank = np.zeros((300, 640, 3), dtype=np.uint8)
+            cv2.putText(blank, "Connecting to UnitV2...", (50, 150),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1)
+            cv2.imshow(WINDOW_NAME, blank)
+            if cv2.waitKey(3000) & 0xFF == ord('q'):
+                sys.exit(0)
+
     log("camera_stream 起動中...")
     activate_camera_stream(session)
 
-    stop_event = threading.Event()
     threading.Thread(target=stream_thread_func, args=(session, stop_event),
                      daemon=True).start()
     log("ストリーム受信開始", "OK")
 
-    # Start Web Server
-    threading.Thread(target=run_web_server, daemon=True).start()
+    # Start Web Server (移動済み)
+    # threading.Thread(target=run_web_server, daemon=True).start()
 
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WINDOW_NAME, 640, 560)
