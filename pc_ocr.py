@@ -15,9 +15,9 @@ warnings.filterwarnings("ignore")   # PyTorch pin_memory 警告などを抑制
 # ─── 設定 ────────────────────────────────────────
 UNITV2_IP    = "10.254.239.1"
 OCR_LANGS    = ["ja", "en"]   # EasyOCR言語コード
-OCR_INTERVAL = 2.0             # 自動OCR間隔(秒)  0=手動のみ (Web連携用に短く)
+OCR_INTERVAL = 0               # 自動OCR間隔(秒)  0=待機なし（全力回転）
 CONF_MIN     = 0.1             # 信頼度下限 (0.0〜1.0)  低い単語は無視
-SCALE        = 3.0             # 前処理拡大率 (大きいほど精度↑・速度↓)
+SCALE        = 2.0             # 前処理拡大率 (3.0は重いので2.0へ戻し、フィルタでカバー)
 WEB_PORT     = 8080            # Webサーバーポート
 
 FUNC_URL    = f"http://{UNITV2_IP}/func"
@@ -122,17 +122,16 @@ def preprocess_for_easyocr(image_bytes):
         img = cv2.resize(img, (int(w * SCALE), int(h * SCALE)),
                          interpolation=cv2.INTER_LANCZOS4)
     
-    # 手書き向け前処理パイプライン
+    # 手書き向け前処理パイプライン (高速化版)
     # 1. グレースケール化
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 2. ノイズ除去 (fastNlMeansDenoising)
-    # h: フィルタの強さ (大きいほどノイズ消えるがディテールも消える)
-    denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
+    # 2. ノイズ除去 (高速化のため GaussianBlur に変更)
+    # fastNlMeansDenoising はリアルタイムには重すぎるため
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
 
     # 3. Adaptive Threshold (二値化) - 照明ムラ・影に対応
-    # blockSize=11, C=2 は一般的な設定
-    binary = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                    cv2.THRESH_BINARY, 11, 2)
     
     # 4. 膨張 (dilate) - 手書きの細い線やかすれをつなげる
