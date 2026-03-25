@@ -368,7 +368,7 @@ def main():
                     cv2.imshow(WINDOW_NAME, disp)
 
             # 自動OCR
-            if (auto_ocr and OCR_INTERVAL > 0 and not ocr_running and raw is not None
+            if (auto_ocr and not ocr_running and raw is not None
                     and time.time() - last_ocr_time >= OCR_INTERVAL):
                 trigger_ocr()
 
