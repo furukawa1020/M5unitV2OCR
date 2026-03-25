@@ -16,8 +16,8 @@ warnings.filterwarnings("ignore")   # PyTorch pin_memory 警告などを抑制
 UNITV2_IP    = "10.254.239.1"
 OCR_LANGS    = ["ja", "en"]   # EasyOCR言語コード
 OCR_INTERVAL = 0               # 自動OCR間隔(秒)  0=待機なし（全力回転）
-CONF_MIN     = 0.1             # 信頼度下限 (0.0〜1.0)  低い単語は無視
-SCALE        = 1.0             # 前処理拡大率 (CPU高速化のため1.0に設定)
+CONF_MIN     = 0.05            # 信頼度下限 (0.0〜1.0)  低い単語は無視
+SCALE        = 1.5             # 前処理拡大率 (精度向上のため1.5に設定)
 WEB_PORT     = 8080            # Webサーバーポート
 
 FUNC_URL    = f"http://{UNITV2_IP}/func"
@@ -108,8 +108,7 @@ def stream_thread_func(session, stop_event):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 前処理: カラーのまま拡大+シャープのみ
-# (EasyOCRはカラー画像を前提とした検出モデルを使う)
+# 前処理: 拡大 + CLAHE コントラスト強調 + シャープ化
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def preprocess_for_easyocr(image_bytes):
     import cv2, numpy as np
@@ -121,8 +120,18 @@ def preprocess_for_easyocr(image_bytes):
     if SCALE != 1.0:
         img = cv2.resize(img, (int(w * SCALE), int(h * SCALE)),
                          interpolation=cv2.INTER_LANCZOS4)
-    
-    # 軽量前処理 (CPU高速化版): カラーのままRGBに変換して返すだけ
+
+    # CLAHE でコントラスト強調 (各チャンネルに適用)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l = clahe.apply(l)
+    img = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
+
+    # アンシャープマスクでエッジ強調
+    blur = cv2.GaussianBlur(img, (0, 0), 3)
+    img = cv2.addWeighted(img, 1.5, blur, -0.5, 0)
+
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 
@@ -143,6 +152,12 @@ def _ocr_worker(image_bytes):
             detail=1,
             paragraph=False,
             batch_size=1,
+            text_threshold=0.5,     # デフォルト0.7より低くして検出率アップ
+            low_text=0.3,           # テキスト確率の下限を緩和
+            link_threshold=0.3,     # 文字間リンクの閾値を緩和
+            contrast_ths=0.1,       # 低コントラスト文字も検出
+            adjust_contrast=0.5,    # EasyOCR内部コントラスト補正
+            width_ths=0.7,          # 幅方向の結合閾値
         )
 
         # 信頼度フィルタ
