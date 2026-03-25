@@ -293,6 +293,8 @@ def main():
     print("  UnitV2 OCR  EasyOCR版 リアルタイムプレビュー", flush=True)
     print(f"  接続先: http://{UNITV2_IP}", flush=True)
     print(f"  OCR言語: {OCR_LANGS}  自動間隔: {OCR_INTERVAL}秒", flush=True)
+    import torch
+    print(f"  GPU使用: {torch.cuda.is_available()} ({torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A'})")
     print("=" * 56, flush=True); print("", flush=True)
 
     import cv2, numpy as np, requests
@@ -302,10 +304,10 @@ def main():
     log("Webサーバー起動試行中...", "INFO")
 
     # ── EasyOCR 初期化 ──
-    log("EasyOCR 初期化中... (初回はモデルDL ~200MB, 数分かかります)")
+    log(f"EasyOCR 初期化中... (GPU: {torch.cuda.is_available()})")
     try:
         import easyocr
-        easyocr_reader = easyocr.Reader(OCR_LANGS, gpu=False, verbose=False)
+        easyocr_reader = easyocr.Reader(OCR_LANGS, gpu=True, verbose=False)
         log("EasyOCR 初期化完了", "OK")
     except ImportError:
         log("easyocr 未インストール: pip install easyocr", "ERR"); sys.exit(1)
