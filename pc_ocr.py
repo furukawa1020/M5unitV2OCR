@@ -39,8 +39,19 @@ easyocr_reader = None   # 起動時に初期化
 # Web Server (Flask)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def run_web_server():
-    from flask import Flask, send_from_directory, jsonify
+    from flask import Flask, send_from_directory, jsonify, request, make_response
     app = Flask(__name__, static_folder='-/')
+
+    def _cors(response):
+        """任意のオリジン（Netlify等）からのアクセスを許可"""
+        response.headers['Access-Control-Allow-Origin']  = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response
+
+    @app.after_request
+    def after_request(response):
+        return _cors(response)
 
     @app.route('/')
     def index():
