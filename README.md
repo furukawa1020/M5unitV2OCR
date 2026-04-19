@@ -158,6 +158,7 @@ M5unitV2OCR/
 │   └── probe_unitv2.py            UnitV2 接続テスト・SSH 鍵登録
 ├── netlify.toml               Netlify デプロイ設定
 ├── USB_DRIVER_INSTALL.md      SR9900 ドライバインストール詳細手順
+├── METHODS.md                 pc_ocr.py 関数・メソッドリファレンス
 └── README.md                  このファイル
 ```
 
