@@ -1,4 +1,4 @@
-﻿# M5Stack UnitV2 OCR — PC リアルタイムプレビュー版
+# M5Stack UnitV2 OCR — PC リアルタイムプレビュー版
 
 UnitV2 のカメラ映像を PC で受信し、**EasyOCR**（深層学習）でリアルタイム文字認識するプロジェクトです。  
 WiFi **不要**。USB ケーブル 1 本で接続します。
@@ -12,11 +12,13 @@ UnitV2 (カメラ) ─── USB-C ─── SR9900 USB-LAN ─── PC
                                                    │
                                             pc_ocr.py
                                          EasyOCR リアルタイム表示
+                                         Flask Web API (ポート 8080)
 ```
 
 - UnitV2 の映像がリアルタイムでウィンドウに表示される
 - 文字が検出されると **緑の枠** でハイライト
 - 画面下部に認識テキスト・信頼度一覧を表示
+- OCR 結果を Web API (`http://localhost:8080/api/ocr_result`) で外部から取得可能
 
 ---
 
@@ -31,13 +33,15 @@ UnitV2 (カメラ) ─── USB-C ─── SR9900 USB-LAN ─── PC
 > UnitV2 は SR9900 チップの USB-LAN として認識されます。M5Stack 本体は不要です。
 
 ### ソフトウェア
-| ソフト | バージョン |
-|---|---|
-| Python | 3.14 (動作確認済) |
-| EasyOCR | 1.7.2 |
-| OpenCV (`opencv-python`) | 4.13 |
-| Pillow | 12.x |
-| requests | 最新 |
+| ソフト | バージョン | 用途 |
+|---|---|---|
+| Python | 3.10 以上 (3.11 推奨) | 実行環境 |
+| EasyOCR | 1.7.2 | 文字認識エンジン |
+| OpenCV (`opencv-python`) | 4.x | カメラ映像処理・プレビュー表示 |
+| Pillow | 10.x 以上 | 日本語テキスト描画 |
+| requests | 最新 | HTTP ストリーム受信 |
+| Flask | 最新 | Web API サーバー |
+| paramiko | 最新 | SSH 鍵登録ツール用（`probe_unitv2.py`） |
 
 ---
 
@@ -63,7 +67,7 @@ ping 10.254.239.1
 ### 2. Python パッケージのインストール
 
 ```powershell
-python -m pip install easyocr opencv-python pillow requests
+python -m pip install easyocr opencv-python pillow requests flask paramiko
 ```
 
 > ⚠️ `opencv-python-headless` は GUI が使えないため **インストール禁止**。  
@@ -75,7 +79,7 @@ python -m pip install easyocr opencv-python pillow requests
 
 ### 3. SSH 鍵の登録（初回のみ）
 
-UnitV2 に公開鍵を登録するとパスワード不要になります：
+UnitV2 に公開鍵を登録するとパスワード不要になります（`paramiko` が必要）：
 
 ```powershell
 python tools\probe_unitv2.py
@@ -104,7 +108,41 @@ OCR_LANGS    = ["ja", "en"]  # 認識言語
 OCR_INTERVAL = 5.0           # 自動 OCR 間隔（秒）
 CONF_MIN     = 0.1           # 信頼度の下限（0.0〜1.0）
 SCALE        = 2.0           # 前処理拡大率（大きいほど精度↑・速度↓）
+WEB_PORT     = 8080          # Web API サーバーのポート番号
 ```
+
+---
+
+## Web API
+
+`pc_ocr.py` を起動すると、ポート `8080` で Flask サーバーが同時に起動します。
+
+### `GET /api/ocr_result`
+
+最新の OCR 結果を JSON で返します。
+
+```json
+{
+  "text": "認識したテキスト全体",
+  "top_char": "最",
+  "raw": [
+    {
+      "text": "認識したテキスト",
+      "conf": 0.95,
+      "bbox": [[10, 20], [200, 20], [200, 50], [10, 50]]
+    }
+  ]
+}
+```
+
+| フィールド | 説明 |
+|---|---|
+| `text` | 全検出テキストを結合した文字列 |
+| `top_char` | 最初に検出されたテキストの先頭 1 文字 |
+| `raw` | 各検出結果（テキスト、信頼度、バウンディングボックス）のリスト |
+
+> Web フロントエンドを `-/` ディレクトリに配置すると `http://localhost:8080/` で表示できます。  
+> Netlify へのデプロイは `netlify.toml` を参照してください。
 
 ---
 
@@ -112,12 +150,14 @@ SCALE        = 2.0           # 前処理拡大率（大きいほど精度↑・�
 
 ```
 M5unitV2OCR/
-├── pc_ocr.py                  ★ メインスクリプト（EasyOCR版）
+├── pc_ocr.py                  ★ メインスクリプト（EasyOCR + Flask Web API）
+├── -/                         Web フロントエンド（index.html 等）
 ├── tools/
 │   ├── install_sr9900_driver.ps1  SR9900 ドライバインストーラー
-│   ├── connect_usb.ps1            USB 接続確認
+│   ├── connect_usb.ps1            USB 接続確認・診断
 │   └── probe_unitv2.py            UnitV2 接続テスト・SSH 鍵登録
-├── USB_DRIVER_INSTALL.md      ドライバインストール詳細手順
+├── netlify.toml               Netlify デプロイ設定
+├── USB_DRIVER_INSTALL.md      SR9900 ドライバインストール詳細手順
 └── README.md                  このファイル
 ```
 
@@ -148,6 +188,11 @@ python -m pip list | Select-String opencv
 EasyOCR は初回起動時に日英モデル（約 200 MB）をダウンロードします。  
 2 回目以降はキャッシュが使われます。
 
+### Web API に接続できない
+- `pc_ocr.py` が起動しているか確認
+- ファイアウォールでポート `8080` が許可されているか確認
+- ポート番号を変更する場合は `pc_ocr.py` の `WEB_PORT` を変更してください
+
 ---
 
 ## 接続情報
@@ -157,4 +202,5 @@ EasyOCR は初回起動時に日英モデル（約 200 MB）をダウンロー�
 | UnitV2 IP | `10.254.239.1` |
 | PC IP | `10.254.239.124` |
 | 映像 URL | `http://10.254.239.1/video_feed` |
-| SSH | `m5stack@10.254.239.1` (鍵認証) |
+| SSH | `m5stack@10.254.239.1` (鍵認証、パスワード: `12345678`) |
+| Web API | `http://localhost:8080/api/ocr_result` |
